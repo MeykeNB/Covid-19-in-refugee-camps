@@ -24,14 +24,19 @@ tents-own [ myhome            ; patch of home
             food-supply
             latrine-counter
             walker?
-            elderly-members
-            adult-members
-            child-members
+            elderly-members   ; number of elderly (60+)in household
+            adult-members     ; number of adults (18 - 60yrs) in household
+            child-members     ; number of children (< 18yrs) in household
             infected?         ; true / false
             destination       ; myhome / facility / none
             occupancy         ; free / busy / sick
             infection         ; susceptible / infected / asymptomatic / symptomatic
             ; not added yet: infection-perception
+            queue-time
+]
+
+facilities-own [
+            waiting-list
 ]
 
 
@@ -47,7 +52,8 @@ to setup
 ;    setxy random-xcor random-ycor
     move-to one-of patches
     set color blue
-    set food-supply random 5
+    set food-supply random 8         ; food supply lasts 7 days.
+    set latrine-counter random 8     ; 10 toilet visits per hh per day, if the day hours are from 6 - 23:30
     determine-household
 
     set shape "campsite"
@@ -59,9 +65,13 @@ to setup
     set infected? False
     set destination "none"
     set walker? false
-;  stamp   ; when tent moves, a picture will remain in place
-;    set color brown
+    set queue-time 0
+
   ]
+    create-facility
+    create-facility
+    create-hospital
+  ask facilities [set pcolor 52 ask neighbors [set pcolor 53] set waiting-list []]  ; facilities mark the area arround them.
 end
 
 to determine-household
@@ -88,39 +98,15 @@ to determine-household
     set child-members 3 ] ] ] ]
 end
 
-;to populate
-;  ask tents [
-;      hatch-refugees 5 [                     ; create refugees
-;      set myhome one-of tents-here ; remember their shelter location
-;      set age-group random-float 1         ; define age-group and gender
-;      set gender random-float 1            ; also define health
-;      ifelse age-group > 0.94 [ set age-group "elderly" set health "weak"]
-;      [ifelse age-group < 0.45 [set age-group "adult" ifelse random-float 1 < 0.5 [set health "weak"][set health "healthy"]]
-;        [set age-group "child" ifelse random-float 1 < 0.05 [set health "weak"][set health "healthy"]]]
-;      ifelse gender < 0.5 [set gender "male"][set gender "female"]
-;
-;      set infection "not infected"
-;      set infection-perception "not infected"
-;      set movements mobility
-;      set destination "none"
-;      set infection "susceptible"
-;      set infection-perception "susceptible"
-;      set sick? False
-;  ]
-;
-;  ; ensure every household has at least 1 adult:
-;    ;ask tents[]
-;  ]
-;end
-
 to create-facility
   ifelse count facilities = 0 [
-    create-facilities 1 [setxy 8 5 set shape "x" set size 2 set color red] ]
-  [create-facilities 1 [setxy -4 19 set shape "x" set size 2 set color 85]]
+    create-facilities 1 [setxy round(random-xcor) round(random-ycor) set shape "drop" set size 1 set color cyan set heading 0] ]
+  [create-facilities 1 [setxy round(random-xcor) round(random-ycor) set shape "toilet2" set size 1 set color grey set heading 0]]
+
 end
 
 to create-hospital
-  create-facilities 1 [setxy -8 -5 set shape "x" set size 2 set color white]
+  create-facilities 1 [setxy round(random-xcor) round(random-ycor) set shape "healthcare" set size 1 set color white set heading 0]
 end
 
 
@@ -134,12 +120,15 @@ to go
       if food-supply = 0 [go-get-food] ]]]
   if Hour = 23 [if Minute = 30 [set day? False]]
   if Hour = 24 [set Hour 0 set Day (Day + 1)]
-
-  while [day? = true] [if (Minute = 10) or (Minute = 25) or (Minute = 40) or (Minute = 55)
+;
+  if day? = true [if (Minute = 10) or (Minute = 25) ;or (Minute = 40) or (Minute = 55)  ; four times per hour, tents can decide to go to the toilets.
     [ ask tents [set latrine-counter (latrine-counter - 1)
-      if latrine-counter = 0 [go-to-latrines]]]]
+      if latrine-counter = 0 [go-to-latrines]
+  ]]]
 
+  ask facilities [manage-queue2]
   ask tents with [walker? = True] [walk-towards-destination]  ; let agents walk
+
 
 ;  ifelse distance destination <= 0.727 [
 ;    ; when distance to destination is smaller than 0.5 (destination is reached) :
@@ -161,6 +150,8 @@ to go
 ;    infect ] ]
   tick
 end
+
+
 
 to go-get-food
   if not any? facilities [user-message (word "No facilities yet")]
@@ -185,30 +176,93 @@ to walk-towards-destination
   ; if 1 patch is 4,47 meters
   ; walking (1 / 3,5) patches per second corresponds to a speed of 1,28 m/s, which is between 4 and 5 km/h.
 
-    ifelse distance destination <= (1 / 3.5) [
+    ifelse distance destination <= (1 / 3.5) [      ; destination is reached
     ifelse destination != myhome [
-      ; stand in line, wait for food
-      ; if food is obtained:
-      set destination myhome ]
+      ; Time for fulfilling activity?
+
+      ; When activity is fulfilled:
+      if member? self [waiting-list] of destination [                        ; if the walker is on the waiting-list of its destination
+        let myspot (position self [waiting-list] of destination)             ; it looks up the destination
+        ask destination [set waiting-list remove-item (myspot) waiting-list] ; and removes itself from this list.
+        set queue-time 0
+      ]
+      set destination myhome
+    set xcor (xcor + 1)]
      [  move-to myhome                              ; when destination myhome is reached:
         set destination "none"
         set occupancy "free"
-        ask tents-here [set food-supply (food-supply + 14)]
+        ask tents-here [set food-supply (food-supply + 7)]
       ask tents-here with [walker? = true][die]] ]
      [ walking ]                   ; keep walking if destination is not reached yet:
 end
 
-to walking
-face destination
-      if patch-ahead 0.5 != nobody [    ;;; This is imperfect, because now they don't move if there's no patch-ahead
 
-    ; they should check a bigger range. Not only ahead, but also to the sides.
-;    ifelse not any? turtles-on patch-ahead 0.5 [fd (1 / 3.5) ][rt 45 fd (1 / 3.5)] ]
-    ifelse not any? tents in-cone 30 0.5 with ([destination = "none"]) and not any? tents in-cone 30 0.5 with [(heading < (30 + [heading] of myself)) and (heading > [heading] of myself)]
-     [fd (1 / 3.5)]  [rt 45 fd (1 / 3.5)]
-  ]
+to walking  ; tent activity
+;  if the walker is not on a red patch, it can move forward, unless there is another tent in its path.
+;  If this other tent is a fixed tent, the walker can walk around it.
+; If the other tent is in a queue for the same destination, the walker stops and joins the queue.
+; If the other tent is also walking, the walker adjusts its heading for 1 step before continuing.
+face destination
+  if patch-ahead 0.5 != nobody [                   ;;; This is imperfect, because now they don't move if there's no patch-ahead
+    ifelse [pcolor] of patch-ahead 0.5 = red and destination != myhome [              ; if the patch is red, tents  can't visit a facility, because it is too crowded.
+      set queue-time (queue-time + 1)
+      if queue-time = 1 [ask destination [set waiting-list lput myself waiting-list] ] ; walker puts itself on the waiting-list of the facility.
+        stop] [
+
+      ifelse not any? other tents in-cone 0.5 60 [fd (1 / 3.5)] [
+        ifelse any? other tents in-cone 0.5 60 with [destination = "none"][rt 45 fd (1 / 3.5)] [
+          ifelse any? other tents in-cone 0.5 60 with [(queue-time > 0) and (destination = [destination] of self)] [
+           set queue-time (queue-time + 1)
+            if queue-time = 1 [ask destination [set waiting-list lput myself waiting-list]]
+           stop] [
+          if [heading] of min-one-of other tents [distance myself] > [heading] of self [rt -60 fd (1 / 3.5)]
+            if [heading] of min-one-of other tents [distance myself] < [heading] of self [rt 60 fd (1 / 3.5)] ]]]
+  ]]
 end
 
+
+to manage-queue2
+  let serving (count tents in-radius (1 / 3.5))    ;; --> ; of moet dit "count tents-on patch-here" zijn?
+  if serving >= 4 [ask neighbors [set pcolor red]
+    ; put tents on waiting-list? Do they do this themselves? ; They should, because manage-queue is first, then walkers see that they are on a red patch)
+  ]
+  if [pcolor] of neighbors = red [
+    if not empty? waiting-list [
+      ask item 0 waiting-list [ move-to myself set queue-time 0]
+      set waiting-list but-first waiting-list]
+
+      ;then, check whether the number of tents is now lower than 4.
+      if count tents-on neighbors <= 4 [ask neighbors [set pcolor green]]
+  ]
+
+end
+
+
+
+
+to manage-queue ; facility activity
+  let beneficiaries count (turtles-on neighbors) with [destination = myself]; with [pcolor = 53]
+    let queue tents in-radius 1.5 with [destination = myself]
+
+    ifelse beneficiaries >= 4 [
+      ask neighbors [set pcolor red] ]
+  [
+    ifelse (beneficiaries = 3) and (count queue > 1) [ print "first ifelse"
+      ask item 0 waiting-list [move-to destination]
+      set waiting-list but-first waiting-list
+    ]
+
+;     ask max-one-of queue [queue-time] [set pcolor 53] ]
+    [ ifelse (beneficiaries = 2) and (count queue > 2) [ print "second ifelse"
+      ask max-n-of 2 queue [queue-time] [set pcolor 53] ]
+      [ifelse (beneficiaries = 1) and (count queue > 3) [ print "third ifelse"
+        ask max-n-of 3 queue [queue-time] [set pcolor 53] ]
+          ;[ifelse beneficiaries = 0 [ask neighbors [set pcolor 53]]
+            [ask neighbors [set pcolor 53]]  print "last ifelse" ; if there is no one at the facility, or the queue is small enough:
+                                             ; all neighboring patches set their color to green again.
+  ]]
+  ]
+end
 
 ;;;;;;;;;;;;;;; VIRUS SPREAD ;;;;;;;;;;;;;;
 
@@ -233,11 +287,11 @@ end
 GRAPHICS-WINDOW
 211
 11
-627
-428
+831
+632
 -1
 -1
-8.0
+12.0
 1
 10
 1
@@ -441,6 +495,17 @@ NIL
 NIL
 1
 
+MONITOR
+39
+197
+96
+242
+NIL
+day?
+17
+1
+11
+
 @#$#@#$#@
 ## WHAT IS IT?
 
@@ -502,6 +567,15 @@ Polygon -7500403 true true 15 75 15 225 150 285 150 135
 Line -16777216 false 150 285 150 135
 Line -16777216 false 150 135 15 75
 Line -16777216 false 150 135 285 75
+
+bread
+false
+0
+Polygon -16777216 true false 140 145 170 250 245 190 234 122 247 107 260 79 260 55 245 40 215 32 185 40 155 31 122 41 108 53 28 118 110 115 140 130
+Polygon -7500403 true true 135 151 165 256 240 196 225 121 241 105 255 76 255 61 240 46 210 38 180 46 150 37 120 46 105 61 47 108 105 121 135 136
+Polygon -1 true false 60 181 45 256 165 256 150 181 165 166 180 136 180 121 165 106 135 98 105 106 75 97 46 107 29 118 30 136 45 166 60 181
+Polygon -16777216 false false 45 255 165 255 150 180 165 165 180 135 180 120 165 105 135 97 105 105 76 96 46 106 29 118 30 135 45 165 60 180
+Line -16777216 false 165 255 239 195
 
 bug
 true
@@ -569,6 +643,13 @@ false
 0
 Circle -7500403 true true 90 90 120
 
+drop
+false
+0
+Circle -7500403 true true 73 133 152
+Polygon -7500403 true true 219 181 205 152 185 120 174 95 163 64 156 37 149 7 147 166
+Polygon -7500403 true true 79 182 95 152 115 120 126 95 137 64 144 37 150 6 154 165
+
 face happy
 false
 0
@@ -627,6 +708,13 @@ Circle -16777216 true false 113 68 74
 Polygon -10899396 true false 189 233 219 188 249 173 279 188 234 218
 Polygon -10899396 true false 180 255 150 210 105 210 75 240 135 240
 
+healthcare
+false
+8
+Circle -1 true false -2 -2 304
+Rectangle -2674135 true false 120 0 180 300
+Rectangle -2674135 true false -30 120 300 180
+
 house
 false
 0
@@ -655,15 +743,6 @@ pentagon
 false
 0
 Polygon -7500403 true true 150 15 15 120 60 285 240 285 285 120
-
-person
-false
-0
-Circle -7500403 true true 110 5 80
-Polygon -7500403 true true 105 90 120 195 90 285 105 300 135 300 150 225 165 300 195 300 210 285 180 195 195 90
-Rectangle -7500403 true true 127 79 172 94
-Polygon -7500403 true true 195 90 240 150 225 180 165 105
-Polygon -7500403 true true 105 90 60 150 75 180 135 105
 
 person doctor
 false
@@ -737,6 +816,30 @@ Circle -7500403 true true 60 60 180
 Circle -16777216 true false 90 90 120
 Circle -7500403 true true 120 120 60
 
+toilet
+false
+0
+Circle -7500403 true true 75 45 30
+Polygon -7500403 true true 75 75 75 135 60 195 60 225 75 225 90 165 105 225 120 225 120 195 105 135 105 75
+Polygon -7500403 true true 105 75 135 120 135 135 90 90
+Polygon -7500403 true true 75 75 45 120 45 135 90 90
+Circle -7500403 true true 195 45 30
+Polygon -7500403 true true 195 75 195 135 195 165 180 225 195 225 210 165 225 225 240 225 225 165 225 135 225 75
+Polygon -7500403 true true 225 75 255 120 255 135 210 90
+Polygon -7500403 true true 195 75 165 120 165 135 210 90
+Polygon -7500403 true true 195 90 165 195 255 195 225 90
+Rectangle -7500403 false true 15 30 285 240
+
+toilet2
+false
+0
+Rectangle -1 true false 0 0 345 300
+Polygon -7500403 true true 255 60 300 165 285 165 255 105 255 180 285 300 255 300 225 195 195 300 180 300 165 300 195 180 195 105 165 165 150 165 195 60 255 60
+Polygon -7500403 true true 45 60 0 165 15 165 45 105 45 180 15 300 45 300 75 195 105 300 120 300 135 300 105 180 105 105 135 165 150 165 105 60 45 60
+Circle -7500403 true true 192 -4 67
+Circle -7500403 true true 41 -4 67
+Polygon -7500403 true true 195 105 165 240 285 240 255 105
+
 tree
 false
 0
@@ -782,6 +885,24 @@ Polygon -10899396 true false 105 90 75 75 55 75 40 89 31 108 39 124 60 105 75 10
 Polygon -10899396 true false 132 85 134 64 107 51 108 17 150 2 192 18 192 52 169 65 172 87
 Polygon -10899396 true false 85 204 60 233 54 254 72 266 85 252 107 210
 Polygon -7500403 true true 119 75 179 75 209 101 224 135 220 225 175 261 128 261 81 224 74 135 88 99
+
+wc
+false
+0
+Rectangle -7500403 false true 0 0 285 270
+Line -7500403 true 15 45 60 255
+Line -7500403 true 60 255 90 120
+Line -7500403 true 90 120 120 255
+Line -7500403 true 120 255 180 45
+Line -7500403 true 270 255 240 255
+Line -7500403 true 210 240 195 210
+Line -7500403 true 195 210 180 165
+Line -7500403 true 180 135 180 165
+Line -7500403 true 240 255 210 240
+Line -7500403 true 270 45 240 45
+Line -7500403 true 240 45 210 60
+Line -7500403 true 210 60 195 90
+Line -7500403 true 195 90 180 135
 
 wheel
 false
